@@ -2,11 +2,11 @@ DEPS = $(wildcard src/*.h)
 OBJ = $(patsubst %.c,%.o,$(wildcard src/*.c))
 OUTPUT = dist/iptc.wasm
 
-$(OUTPUT): $(OBJ) Makefile
+$(OUTPUT): $(OBJ) Makefile external_symbols
 	wasm-ld \
 		-o $(OUTPUT) \
 		--strip-all \
-		--allow-undefined \
+		--allow-undefined-file=external_symbols \
 		--initial-memory=131072 \
 		--compress-relocations \
 		--lto-O3 \

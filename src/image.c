@@ -16,6 +16,7 @@
  */
  
 #include "libc.h"
+#include "php.h"
 
 // Will be provided by Javascript.
 void read_app_cb(int, char*, size_t);
@@ -61,22 +62,6 @@ const char php_sig_jpg[3] = {(char) 0xff, (char) 0xd8, (char) 0xff};
 #define M_COM   0xFE            /* COMment                                  */
 
 #define M_PSEUDO 0xFFD8			/* pseudo marker for start of image(byte 0) */
-
-static void php_stream_seek_cur(php_stream * stream, zend_long length)
-{
-  int remaining = stream->len - stream->pos;
-  if (length > remaining) length = remaining;
-  stream->pos += length;
-}
-
-static ssize_t php_stream_read(php_stream * stream, void * buf, size_t length)
-{
-  int remaining = stream->len - stream->pos;
-  if (length > remaining) length = remaining;
-  memcpy(buf, stream->buf + stream->pos, length);
-  stream->pos += length;
-  return length;
-}
 
 /* {{{ php_read2 */
 static unsigned short php_read2(php_stream * stream)
