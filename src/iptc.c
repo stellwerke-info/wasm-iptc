@@ -65,15 +65,20 @@
 #define M_APP15 0xef
 
 /* {{{ php_iptc_put1 */
-static int php_iptc_put1(unsigned char c, unsigned char **spoolbuf)
+static int php_iptc_put1(unsigned char c, unsigned char **spoolbuf, const unsigned char *spoolbuf_end)
 {
-	if (spoolbuf) *(*spoolbuf)++ = c;
+	if (spoolbuf) {
+		if (*spoolbuf >= spoolbuf_end) {
+			return EOF;
+		}
+		*(*spoolbuf)++ = c;
+	}
 	return c;
 }
 /* }}} */
 
 /* {{{ php_iptc_get1 */
-static int php_iptc_get1(FILE *fp, unsigned char **spoolbuf)
+static int php_iptc_get1(FILE *fp, unsigned char **spoolbuf, const unsigned char *spoolbuf_end)
 {
 	int c;
 
@@ -81,67 +86,72 @@ static int php_iptc_get1(FILE *fp, unsigned char **spoolbuf)
 
 	if (c == EOF) return EOF;
 
-	if (spoolbuf) *(*spoolbuf)++ = c;
+	if (spoolbuf) {
+		if (*spoolbuf >= spoolbuf_end) {
+			return EOF;
+		}
+		*(*spoolbuf)++ = c;
+	}
 
 	return c;
 }
 /* }}} */
 
 /* {{{ php_iptc_read_remaining */
-static int php_iptc_read_remaining(FILE *fp, unsigned char **spoolbuf)
+static int php_iptc_read_remaining(FILE *fp, unsigned char **spoolbuf, const unsigned char *spoolbuf_end)
 {
-	while (php_iptc_get1(fp, spoolbuf) != EOF) continue;
+	while (php_iptc_get1(fp, spoolbuf, spoolbuf_end) != EOF) continue;
 
 	return M_EOI;
 }
 /* }}} */
 
 /* {{{ php_iptc_skip_variable */
-static int php_iptc_skip_variable(FILE *fp, unsigned char **spoolbuf)
+static int php_iptc_skip_variable(FILE *fp, unsigned char **spoolbuf, const unsigned char *spoolbuf_end)
 {
 	unsigned int  length;
 	int c1, c2;
 
-	if ((c1 = php_iptc_get1(fp, spoolbuf)) == EOF) return M_EOI;
+	if ((c1 = php_iptc_get1(fp, spoolbuf, spoolbuf_end)) == EOF) return M_EOI;
 
-	if ((c2 = php_iptc_get1(fp, spoolbuf)) == EOF) return M_EOI;
+	if ((c2 = php_iptc_get1(fp, spoolbuf, spoolbuf_end)) == EOF) return M_EOI;
 
 	length = (((unsigned char) c1) << 8) + ((unsigned char) c2);
 
 	length -= 2;
 
 	while (length--)
-		if (php_iptc_get1(fp, spoolbuf) == EOF) return M_EOI;
+		if (php_iptc_get1(fp, spoolbuf, spoolbuf_end) == EOF) return M_EOI;
 
 	return 0;
 }
 /* }}} */
 
 /* {{{ php_iptc_next_marker */
-static int php_iptc_next_marker(FILE *fp, unsigned char **spoolbuf)
+static int php_iptc_next_marker(FILE *fp, unsigned char **spoolbuf, const unsigned char *spoolbuf_end)
 {
 	int c;
 
 	/* skip unimportant stuff */
 
-	c = php_iptc_get1(fp, spoolbuf);
+	c = php_iptc_get1(fp, spoolbuf, spoolbuf_end);
 
 	if (c == EOF) return M_EOI;
 	
 	while (c != 0xff) {
-		if ((c = php_iptc_get1(fp, spoolbuf)) == EOF)
+		if ((c = php_iptc_get1(fp, spoolbuf, spoolbuf_end)) == EOF)
 			return M_EOI; /* we hit EOF */
 	}
 	
 
 	/* get marker byte, swallowing possible padding */
 	do {
-		c = php_iptc_get1(fp, 0);
+		c = php_iptc_get1(fp, 0, spoolbuf_end);
 		if (c == EOF)
 			return M_EOI;       /* we hit EOF */
 		else
 		if (c == 0xff)
-			php_iptc_put1((unsigned char)c, spoolbuf);
+			php_iptc_put1((unsigned char)c, spoolbuf, spoolbuf_end);
 	} while (c == 0xff);
 
 	return (unsigned int) c;
@@ -160,41 +170,47 @@ WASM_EXPORT("iptcembed") FILE* iptcembed(unsigned char *iptcdata, size_t iptcdat
 	size_t inx;
 	unsigned char *spoolbuf = NULL;
 	unsigned char *poi = NULL;
+	unsigned char *spoolbuf_end = NULL;
 	bool written = 0;
 
 	if (iptcdata_len >= SIZE_MAX - sizeof(psheader) - 1025) {
 		return NULL;
 	}
-      
-	spoolbuf = (unsigned char*) calloc(iptcdata_len + sizeof(psheader) + 1024 + 1 + jpeg_file_len, 1);
-	poi = spoolbuf;
-	memset(poi, 0, iptcdata_len + sizeof(psheader) + jpeg_file_len + 1024 + 1);
 
-	if (php_iptc_get1(fp, &poi) != 0xFF) {
+        size_t spoolbuf_len = iptcdata_len + sizeof(psheader) + 1024 + 1 + jpeg_file_len;
+	spoolbuf = (unsigned char*) calloc(spoolbuf_len, 1);
+	poi = spoolbuf;
+	spoolbuf_end = poi + spoolbuf_len;
+	memset(poi, 0, spoolbuf_len);
+
+	if (php_iptc_get1(fp, &poi, spoolbuf_end) != 0xFF) {
 		free(spoolbuf);
 		return NULL;
 	}
 
-	if (php_iptc_get1(fp, &poi) != 0xD8) {
+	if (php_iptc_get1(fp, &poi, spoolbuf_end) != 0xD8) {
+err:
                 free(spoolbuf);
 		return NULL;
 	}
 
 	while (!done) {
-		marker = php_iptc_next_marker(fp, &poi);
+		marker = php_iptc_next_marker(fp, &poi, spoolbuf_end);
 
 		if (marker == M_EOI) { /* EOF */
 			break;
 		} else if (marker != M_APP13) {
-			php_iptc_put1((unsigned char)marker, &poi);
+			if (php_iptc_put1((unsigned char)marker, &poi, spoolbuf_end) < 0) {
+		            goto err;
+		        }
 		}
 
 		switch (marker) {
 			case M_APP13:
 				/* we are going to write a new APP13 marker, so don't output the old one */
-				php_iptc_skip_variable(fp, 0);
+				php_iptc_skip_variable(fp, 0, spoolbuf_end);
 				fgetc(fp); /* skip already copied 0xFF byte */
-				php_iptc_read_remaining(fp, &poi);
+				php_iptc_read_remaining(fp, &poi, spoolbuf_end);
 				done = 1;
 				break;
 
@@ -207,7 +223,7 @@ WASM_EXPORT("iptcembed") FILE* iptcembed(unsigned char *iptcdata, size_t iptcdat
 				}
 				written = 1;
 
-				php_iptc_skip_variable(fp, &poi);
+				php_iptc_skip_variable(fp, &poi, spoolbuf_end);
 
 				if (iptcdata_len & 1) {
 					iptcdata_len++; /* make the length even */
@@ -217,29 +233,38 @@ WASM_EXPORT("iptcembed") FILE* iptcembed(unsigned char *iptcdata, size_t iptcdat
 				psheader[ 3 ] = (iptcdata_len+28)&0xff;
 
 				for (inx = 0; inx < 28; inx++) {
-					php_iptc_put1(psheader[inx], &poi);
+					if (php_iptc_put1(psheader[inx], &poi, spoolbuf_end) < 0) {
+		                            goto err;
+		                        }
 				}
 
-				php_iptc_put1((unsigned char)(iptcdata_len>>8), &poi);
-				php_iptc_put1((unsigned char)(iptcdata_len&0xff), &poi);
+				if (php_iptc_put1((unsigned char)(iptcdata_len>>8), &poi, spoolbuf_end) < 0) {
+	                            goto err;
+	                        }
+				if (php_iptc_put1((unsigned char)(iptcdata_len&0xff), &poi, spoolbuf_end) < 0) {
+		                    goto err;
+		                }
 
 				for (inx = 0; inx < iptcdata_len; inx++) {
-					php_iptc_put1(iptcdata[inx], &poi);
+					if (php_iptc_put1(iptcdata[inx], &poi, spoolbuf_end) < 0){
+		                            goto err;
+		                        }
 				}
 				break;
 
 			case M_SOS:
 				/* we hit data, no more marker-inserting can be done! */
-				php_iptc_read_remaining(fp, &poi);
+				php_iptc_read_remaining(fp, &poi, spoolbuf_end);
 				done = 1;
 				break;
 
 			default:
-				php_iptc_skip_variable(fp, &poi);
+				php_iptc_skip_variable(fp, &poi, spoolbuf_end);
 				break;
 		}
 	}
 
+  *poi = '\0';
   FILE *of = (FILE*)calloc(1, sizeof(FILE));
   of->buf = spoolbuf;
   of->len = (size_t)(poi - spoolbuf);
